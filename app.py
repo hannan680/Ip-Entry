@@ -23,7 +23,11 @@ def validate_ip(ip):
     return re.match(pattern, ip) is not None
 
 # Database setup
-DATABASE = 'ip_tracker.db'
+import os
+DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'ip_tracker.db')
+
+# Ensure data directory exists
+os.makedirs(os.path.dirname(DATABASE), exist_ok=True)
 
 def init_db():
     """Initialize the database with required tables"""
@@ -916,4 +920,5 @@ def api_save_ip():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # For development only - in production, use Gunicorn
+    app.run(host='0.0.0.0', port=8000, debug=False)
