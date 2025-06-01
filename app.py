@@ -921,4 +921,4 @@ def api_save_ip():
 
 if __name__ == '__main__':
     # For development only - in production, use Gunicorn
-    app.run(host='0.0.0.0', port=8000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)

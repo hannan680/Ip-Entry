@@ -15,7 +15,7 @@ This guide provides instructions for deploying the Flask IP Geolocation Tracker 
    docker-compose up -d
    ```
 3. **Access the application:**
-   - Open your browser and navigate to `http://localhost:8000`
+   - Open your browser and navigate to `http://localhost:5000`
 
 ## Manual Docker Deployment
 
@@ -30,7 +30,7 @@ docker build -t flask-ip-tracker .
 ```bash
 docker run -d \
   --name flask-ip-tracker \
-  -p 8000:8000 \
+  -p 5000:5000 \
   -v $(pwd)/data:/app/data \
   flask-ip-tracker
 ```
