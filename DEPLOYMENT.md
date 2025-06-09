@@ -1,23 +1,23 @@
 # Flask IP Tracker - Deployment Guide
 
-This guide provides instructions for deploying the Flask IP Geolocation Tracker using Docker.
+This guide provides instructions for deploying the Flask IP Geolocation Tracker using Coolify with PostgreSQL database.
 
 ## Prerequisites
 
-- Docker installed on your system
-- Docker Compose (optional, for easier management)
+- Coolify instance set up
+- PostgreSQL database (hosted)
+- Git repository with your code
 
-## Quick Start with Docker Compose
+## Coolify Deployment
 
-1. **Clone or download the project files**
-2. **Build and run the application:**
-   ```bash
-   docker-compose up -d
-   ```
-3. **Access the application:**
-   - Open your browser and navigate to `http://localhost:5000`
+1. **Create a new project in Coolify**
+2. **Connect your Git repository**
+3. **Configure environment variables:**
+   - `DATABASE_URL`: Your PostgreSQL connection string
+   - `FLASK_SECRET_KEY`: Secure secret key for Flask sessions
+4. **Deploy the application**
 
-## Manual Docker Deployment
+## Manual Docker Deployment (Local Testing)
 
 ### Build the Docker Image
 
@@ -31,18 +31,26 @@ docker build -t flask-ip-tracker .
 docker run -d \
   --name flask-ip-tracker \
   -p 5000:5000 \
-  -v $(pwd)/data:/app/data \
+  --env-file .env \
   flask-ip-tracker
 ```
 
-## Production Deployment
+## Production Deployment with Coolify
 
 ### Environment Variables
 
 The application supports the following environment variables:
 
+- `DATABASE_URL`: PostgreSQL connection string (required)
+- `FLASK_SECRET_KEY`: Secret key for Flask sessions
 - `FLASK_ENV`: Set to `production` for production deployment
 - `FLASK_APP`: Application entry point (default: `app.py`)
+
+Example `.env` file:
+```env
+DATABASE_URL=postgres://username:password@host:port/database
+FLASK_SECRET_KEY=your-secure-secret-key-here
+```
 
 ### Security Considerations
 
@@ -53,34 +61,30 @@ The application supports the following environment variables:
 
 2. **Use HTTPS** in production with a reverse proxy (nginx, Apache, etc.)
 
-3. **Database persistence**: The SQLite database is stored in the `/app/data` directory inside the container. Mount this as a volume for data persistence.
+3. **Database connection**: The application connects to an external PostgreSQL database. Ensure your DATABASE_URL is properly configured.
 
-### Scaling with Docker Swarm
+### Coolify Configuration
 
-For high-availability deployment:
+1. **Repository Settings:**
+   - Set build context to root directory
+   - Dockerfile path: `./Dockerfile`
+   - Port: `5000`
 
-```bash
-docker service create \
-  --name flask-ip-tracker \
-  --replicas 3 \
-  --publish 8000:8000 \
-  --mount type=volume,source=ip-tracker-data,target=/app/data \
-  flask-ip-tracker
-```
+2. **Environment Variables:**
+   ```
+   DATABASE_URL=your_postgresql_connection_string
+   FLASK_SECRET_KEY=your_secure_secret_key
+   ```
 
-### Health Checks
-
-The Docker image includes health checks that verify the application is responding on port 8000.
+3. **Health Checks:**
+   The Docker image includes health checks that verify the application is responding on port 5000.
 
 ## Monitoring
 
 ### Container Logs
 
 ```bash
-# Docker Compose
-docker-compose logs -f
-
-# Docker
+# View logs in Coolify dashboard or via Docker
 docker logs -f flask-ip-tracker
 ```
 
@@ -89,25 +93,25 @@ docker logs -f flask-ip-tracker
 The application includes a health check endpoint. You can verify it's running:
 
 ```bash
-curl http://localhost:8000/
+curl http://your-app-url/
 ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Port already in use**: Change the port mapping in docker-compose.yml or docker run command
-2. **Permission issues**: Ensure the data directory has proper permissions
-3. **Database errors**: Check that the data volume is properly mounted
+1. **Database connection errors**: Verify DATABASE_URL is correct and accessible
+2. **Environment variables**: Ensure all required environment variables are set in Coolify
+3. **Port configuration**: Application runs on port 5000 by default
 
 ### Debug Mode
 
-For debugging, you can run the container with debug output:
+For local debugging, you can run the container with debug output:
 
 ```bash
 docker run -it --rm \
-  -p 8000:8000 \
-  -v $(pwd)/data:/app/data \
+  -p 5000:5000 \
+  --env-file .env \
   flask-ip-tracker \
   python app.py
 ```
@@ -117,60 +121,50 @@ docker run -it --rm \
 ### Gunicorn Configuration
 
 The production deployment uses Gunicorn with the following settings:
-- 4 worker processes
+- 2 worker processes (optimized for Coolify)
 - 120-second timeout
-- Binding to all interfaces (0.0.0.0:8000)
+- Binding to all interfaces (0.0.0.0:5000)
+- Access and error logging enabled
 
 To modify these settings, update the CMD in the Dockerfile:
 
 ```dockerfile
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "8", "--timeout", "60", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "60", "app:app"]
 ```
 
 ### Resource Limits
 
-For production, consider setting resource limits:
-
-```yaml
-# docker-compose.yml
-services:
-  ip-tracker:
-    # ... other settings
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-```
+Resource limits can be configured in Coolify's dashboard under the application settings.
 
 ## Backup and Recovery
 
 ### Database Backup
 
 ```bash
-# Copy database from running container
-docker cp flask-ip-tracker:/app/data/ip_tracker.db ./backup_$(date +%Y%m%d_%H%M%S).db
+# Create PostgreSQL backup
+pg_dump $DATABASE_URL > backup_$(date +%Y%m%d_%H%M%S).sql
+
+# Or using Docker if pg_dump is not available locally
+docker run --rm postgres:15 pg_dump $DATABASE_URL > backup_$(date +%Y%m%d_%H%M%S).sql
 ```
 
 ### Database Restore
 
 ```bash
-# Copy database to running container
-docker cp ./backup.db flask-ip-tracker:/app/data/ip_tracker.db
-docker restart flask-ip-tracker
+# Restore PostgreSQL backup
+psql $DATABASE_URL < backup.sql
+
+# Or using Docker
+docker run --rm -i postgres:15 psql $DATABASE_URL < backup.sql
 ```
 
 ## Updates
 
-To update the application:
+To update the application in Coolify:
 
-1. **Pull new code**
-2. **Rebuild the image:**
-   ```bash
-   docker-compose down
-   docker-compose build --no-cache
-   docker-compose up -d
-   ```
+1. **Push new code to your Git repository**
+2. **Trigger a new deployment in Coolify dashboard**
+3. **Or enable auto-deployment for automatic updates**
 
 ## Support
 

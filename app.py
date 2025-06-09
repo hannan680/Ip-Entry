@@ -1,12 +1,18 @@
 from flask import Flask, request, render_template_string, redirect, url_for, flash, jsonify
 import requests
-import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import datetime
 import os
 import re
+import json
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'ip-tracker-2024-secure-key-f8d9a7b3c1e5'  # Used for flash messages
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'ip-tracker-2024-secure-key-f8d9a7b3c1e5')  # Used for flash messages
 
 def get_country_flag(country_code):
     """Convert country code to flag emoji"""
@@ -23,54 +29,70 @@ def validate_ip(ip):
     return re.match(pattern, ip) is not None
 
 # Database setup
-import os
-DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'ip_tracker.db')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
-# Ensure data directory exists
-os.makedirs(os.path.dirname(DATABASE), exist_ok=True)
+def get_db_connection():
+    """Get PostgreSQL database connection"""
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
-    """Initialize the database with required tables"""
-    conn = sqlite3.connect(DATABASE)
+    """Initialize PostgreSQL database with required tables"""
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ip_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ip_address TEXT NOT NULL,
-            country TEXT,
-            region TEXT,
-            city TEXT,
+            id SERIAL PRIMARY KEY,
+            ip_address INET NOT NULL UNIQUE,
+            country VARCHAR(100),
+            region VARCHAR(100),
+            city VARCHAR(100),
             org TEXT,
-            vpn_detected BOOLEAN,
-            vpn_type TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(ip_address)
+            vpn_detected BOOLEAN DEFAULT FALSE,
+            vpn_type VARCHAR(50),
+            raw_geo_data JSONB,
+            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Create indexes for better performance
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ip_address ON ip_records(ip_address)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_country ON ip_records(country)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON ip_records(timestamp)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_vpn_detected ON ip_records(vpn_detected)')
     
     conn.commit()
     conn.close()
 
 def is_ip_in_database(ip):
-    """Check if IP exists in database"""
-    conn = sqlite3.connect(DATABASE)
+    """Check if IP exists in PostgreSQL database"""
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM ip_records WHERE ip_address = ?', (ip,))
-    count = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) as count FROM ip_records WHERE ip_address = %s', (ip,))
+    result = cursor.fetchone()
+    count = result['count'] if result else 0
     conn.close()
     return count > 0
 
 def save_ip_to_database(ip_data):
-    """Save IP data to database"""
-    conn = sqlite3.connect(DATABASE)
+    """Save IP data to PostgreSQL database"""
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO ip_records
-            (ip_address, country, region, city, org, vpn_detected, vpn_type, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ip_records
+            (ip_address, country, region, city, org, vpn_detected, vpn_type, raw_geo_data, timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (ip_address) DO UPDATE SET
+                country = EXCLUDED.country,
+                region = EXCLUDED.region,
+                city = EXCLUDED.city,
+                org = EXCLUDED.org,
+                vpn_detected = EXCLUDED.vpn_detected,
+                vpn_type = EXCLUDED.vpn_type,
+                raw_geo_data = EXCLUDED.raw_geo_data,
+                timestamp = CURRENT_TIMESTAMP
         ''', (
             ip_data['ip'],
             ip_data['location']['country'],
@@ -79,11 +101,12 @@ def save_ip_to_database(ip_data):
             ip_data['location']['org'],
             ip_data['vpn_detected'],
             ip_data['vpn_type'],
-            datetime.datetime.now()
+            json.dumps(ip_data)  # Store complete data as JSON
         ))
         conn.commit()
         return True
     except Exception as e:
+        conn.rollback()
         return False
     finally:
         conn.close()
@@ -183,7 +206,7 @@ def home():
     display_ip = custom_ip if custom_ip and not error_message else user_ip
     
     # Modern professional HTML template with AJAX
-    html_template = """
+    html_template = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -539,8 +562,7 @@ def home():
 <body>
     <div class="container">
         <div class="header">
-            <h1><i class="fas fa-globe-americas"></i> IP Tracker</h1>
-            <p>Advanced IP Geolocation & Security Analysis</p>
+            <h1><i class="fas fa-globe-americas"></i> IP Entry</h1>
         </div>
         
         <!-- IP Input Form -->
@@ -652,7 +674,7 @@ def home():
             {% if status == 'new' %}
                 <button id="save-btn" class="btn btn-primary" style="width: 100%;" data-ip="{{ ip }}">
                     <i class="fas fa-save"></i>
-                    <span>Save to Database</span>
+                    <span>Save</span>
                 </button>
             {% else %}
                 <div class="duplicate-notice">
@@ -921,4 +943,4 @@ def api_save_ip():
 
 if __name__ == '__main__':
     # For development only - in production, use Gunicorn
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5005, debug=False)
