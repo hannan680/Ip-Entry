@@ -43,6 +43,7 @@ def validate_ip(ip):
 
 # Database setup
 DATABASE_URL = os.getenv('DATABASE_URL')
+IPAPI_TOKEN = os.getenv('IPAPI_TOKEN')
 
 def get_db_connection():
     """Get PostgreSQL database connection"""
@@ -168,45 +169,50 @@ def get_ip_info(custom_ip=None):
         ip = get_user_ip()
 
     try:
-        # Geolocation and VPN lookup using ipinfo.io
-        geo_url = f"https://ipinfo.io/{ip}/json"
-        logger.debug(f"Requesting geolocation for IP: {ip}")
+        # Geolocation lookup using ipinfo.io lite endpoint with optional token
+        geo_url = f"https://api.ipinfo.io/lite/{ip}"
+        if IPAPI_TOKEN:
+            geo_url += f"?token={IPAPI_TOKEN}"
+        logger.debug(f"Requesting geolocation for IP: {ip} from ipinfo.io lite: {geo_url}")
         geo_data = requests.get(geo_url, timeout=5).json()
-
-        # VPN/proxy detection (ipinfo.io privacy field)
-        privacy_url = f"https://ipinfo.io/{ip}/privacy"
-        privacy_data = requests.get(privacy_url, timeout=5).json()
-        is_vpn = privacy_data.get("vpn", False)
-        is_proxy = privacy_data.get("proxy", False)
-        is_tor = privacy_data.get("tor", False)
-        logger.debug(f"Geo data: {geo_data}, Privacy: {privacy_data}")
+        logger.debug(f"Geo data: {geo_data}")
     except Exception as e:
-        logger.error(f"Error fetching geolocation/VPN info for IP {ip}: {e}")
+        logger.error(f"Error fetching geolocation info for IP {ip}: {e}")
         # Fallback data if API fails
-        geo_data = {"country": "Unknown", "region": "Unknown", "city": "Unknown", "org": "Unknown"}
-        is_vpn = is_proxy = is_tor = False
+        geo_data = {
+            "ip": ip,
+            "asn": "Unknown",
+            "as_name": "Unknown",
+            "as_domain": "Unknown",
+            "country_code": "",
+            "country": "Unknown",
+            "continent_code": "",
+            "continent": "Unknown"
+        }
 
     # Check if IP exists in database
     status = "duplicate" if is_ip_in_database(ip) else "new"
     logger.info(f"IP {ip} status: {status}")
     
     # Get country code and flag
-    country_code = geo_data.get("country", "")
+    country_code = geo_data.get("country_code", "")
     country_flag = get_country_flag(country_code)
 
     return {
         "status": status,
-        "ip": ip,
+        "ip": geo_data.get("ip", ip),
         "location": {
             "country": geo_data.get("country", "Unknown"),
             "country_code": country_code,
             "country_flag": country_flag,
-            "region": geo_data.get("region", "Unknown"),
-            "city": geo_data.get("city", "Unknown"),
-            "org": geo_data.get("org", "Unknown")
+            "continent": geo_data.get("continent", "Unknown"),
+            "continent_code": geo_data.get("continent_code", ""),
+            "asn": geo_data.get("asn", "Unknown"),
+            "as_name": geo_data.get("as_name", "Unknown"),
+            "as_domain": geo_data.get("as_domain", "Unknown")
         },
-        "vpn_detected": is_vpn or is_proxy or is_tor,
-        "vpn_type": "VPN" if is_vpn else "Proxy" if is_proxy else "Tor" if is_tor else None
+        "vpn_detected": False,
+        "vpn_type": None
     }
 
 @app.route('/', methods=['GET', 'POST'])
@@ -679,7 +685,9 @@ def home():
                     </div>
                     <div class="info-content">
                         <div class="info-label">Location</div>
-                        <div class="info-value" id="location-value">{{ location.city }}, {{ location.region }}</div>
+                        <div class="info-value" id="location-value">
+                            {{ location.country }}{% if location.continent %}, {{ location.continent }}{% endif %}
+                        </div>
                     </div>
                 </div>
                 
@@ -689,7 +697,9 @@ def home():
                     </div>
                     <div class="info-content">
                         <div class="info-label">Organization</div>
-                        <div class="info-value" id="org-value">{{ location.org }}</div>
+                        <div class="info-value" id="org-value">
+                            {% if location.as_name %}{{ location.as_name }}{% elif location.org %}{{ location.org }}{% else %}Unknown{% endif %}
+                        </div>
                     </div>
                 </div>
             </div>
