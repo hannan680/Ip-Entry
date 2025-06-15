@@ -11,6 +11,19 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+import logging
+
+# Logging configuration for testing
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("app_test.log", mode='a')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'ip-tracker-2024-secure-key-f8d9a7b3c1e5')  # Used for flash messages
 
@@ -37,48 +50,53 @@ def get_db_connection():
 
 def init_db():
     """Initialize PostgreSQL database with required tables"""
+    logger.info("Initializing database and ensuring required tables exist.")
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ip_records (
-            id SERIAL PRIMARY KEY,
-            ip_address INET NOT NULL UNIQUE,
-            country VARCHAR(100),
-            region VARCHAR(100),
-            city VARCHAR(100),
-            org TEXT,
-            vpn_detected BOOLEAN DEFAULT FALSE,
-            vpn_type VARCHAR(50),
-            raw_geo_data JSONB,
-            timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Create indexes for better performance
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_ip_address ON ip_records(ip_address)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_country ON ip_records(country)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON ip_records(timestamp)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_vpn_detected ON ip_records(vpn_detected)')
-    
-    conn.commit()
-    conn.close()
+    try:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ip_records (
+                id SERIAL PRIMARY KEY,
+                ip_address INET NOT NULL UNIQUE,
+                country VARCHAR(100),
+                region VARCHAR(100),
+                city VARCHAR(100),
+                org TEXT,
+                vpn_detected BOOLEAN DEFAULT FALSE,
+                vpn_type VARCHAR(50),
+                raw_geo_data JSONB,
+                timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Create indexes for better performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ip_address ON ip_records(ip_address)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_country ON ip_records(country)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON ip_records(timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_vpn_detected ON ip_records(vpn_detected)')
+        conn.commit()
+        logger.info("Database initialized successfully.")
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}")
+    finally:
+        conn.close()
 
 def is_ip_in_database(ip):
     """Check if IP exists in PostgreSQL database"""
+    logger.debug(f"Checking if IP {ip} exists in database.")
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) as count FROM ip_records WHERE ip_address = %s', (ip,))
     result = cursor.fetchone()
     count = result['count'] if result else 0
     conn.close()
+    logger.debug(f"IP {ip} exists: {count > 0}")
     return count > 0
 
 def save_ip_to_database(ip_data):
     """Save IP data to PostgreSQL database"""
+    logger.info(f"Saving IP data to database: {ip_data['ip']}")
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute('''
             INSERT INTO ip_records
@@ -104,8 +122,10 @@ def save_ip_to_database(ip_data):
             json.dumps(ip_data)  # Store complete data as JSON
         ))
         conn.commit()
+        logger.info(f"IP {ip_data['ip']} saved/updated successfully.")
         return True
     except Exception as e:
+        logger.error(f"Error saving IP {ip_data['ip']} to database: {e}")
         conn.rollback()
         return False
     finally:
@@ -138,6 +158,7 @@ def get_ip_info(custom_ip=None):
     # Use custom IP if provided, otherwise get user's IP
     if custom_ip:
         if not validate_ip(custom_ip):
+            logger.warning(f"Invalid IP address format received: {custom_ip}")
             return {
                 "error": "Invalid IP address format",
                 "ip": custom_ip
@@ -149,6 +170,7 @@ def get_ip_info(custom_ip=None):
     try:
         # Geolocation and VPN lookup using ipinfo.io
         geo_url = f"https://ipinfo.io/{ip}/json"
+        logger.debug(f"Requesting geolocation for IP: {ip}")
         geo_data = requests.get(geo_url, timeout=5).json()
 
         # VPN/proxy detection (ipinfo.io privacy field)
@@ -157,13 +179,16 @@ def get_ip_info(custom_ip=None):
         is_vpn = privacy_data.get("vpn", False)
         is_proxy = privacy_data.get("proxy", False)
         is_tor = privacy_data.get("tor", False)
-    except:
+        logger.debug(f"Geo data: {geo_data}, Privacy: {privacy_data}")
+    except Exception as e:
+        logger.error(f"Error fetching geolocation/VPN info for IP {ip}: {e}")
         # Fallback data if API fails
         geo_data = {"country": "Unknown", "region": "Unknown", "city": "Unknown", "org": "Unknown"}
         is_vpn = is_proxy = is_tor = False
 
     # Check if IP exists in database
     status = "duplicate" if is_ip_in_database(ip) else "new"
+    logger.info(f"IP {ip} status: {status}")
     
     # Get country code and flag
     country_code = geo_data.get("country", "")
@@ -889,21 +914,26 @@ def api_analyze_ip():
     try:
         data = request.get_json()
         ip_address = data.get('ip_address', '').strip()
+        logger.info(f"API /api/analyze-ip called with IP: {ip_address}")
         
         if not ip_address:
+            logger.warning("No IP address provided to /api/analyze-ip")
             return jsonify({'error': 'IP address is required'}), 400
         
         result = get_ip_info(ip_address)
         
         if 'error' in result:
+            logger.warning(f"Error in IP analysis: {result['error']}")
             return jsonify({'error': result['error']}), 400
         
+        logger.info(f"IP analysis successful for {ip_address}")
         return jsonify({
             'success': True,
             'data': result
         })
         
     except Exception as e:
+        logger.error(f"Exception in /api/analyze-ip: {e}")
         return jsonify({'error': 'Server error occurred'}), 500
 
 @app.route('/api/save-ip', methods=['POST'])
@@ -912,25 +942,31 @@ def api_save_ip():
     try:
         data = request.get_json()
         ip_address = data.get('ip_address', '').strip()
+        logger.info(f"API /api/save-ip called with IP: {ip_address}")
         
         if not ip_address:
+            logger.warning("No IP address provided to /api/save-ip")
             return jsonify({'error': 'IP address is required'}), 400
         
         ip_data = get_ip_info(ip_address)
         
         if 'error' in ip_data:
+            logger.warning(f"Error in IP data: {ip_data['error']}")
             return jsonify({'error': ip_data['error']}), 400
         
         if ip_data['status'] == 'new':
             if save_ip_to_database(ip_data):
+                logger.info(f"IP {ip_data['ip']} saved successfully via API.")
                 return jsonify({
                     'success': True,
                     'message': f"IP {ip_data['ip']} saved successfully!",
                     'data': ip_data
                 })
             else:
+                logger.error(f"Failed to save IP {ip_data['ip']} to database via API.")
                 return jsonify({'error': 'Failed to save IP to database'}), 500
         else:
+            logger.info(f"IP {ip_data['ip']} already exists in database.")
             return jsonify({
                 'success': False,
                 'message': 'IP already exists in database',
@@ -938,9 +974,11 @@ def api_save_ip():
             })
             
     except Exception as e:
+        logger.error(f"Exception in /api/save-ip: {e}")
         return jsonify({'error': 'Server error occurred'}), 500
 
 
 if __name__ == '__main__':
+    logger.info("Starting Flask app for local testing on http://0.0.0.0:5005")
     # For development only - in production, use Gunicorn
     app.run(host='0.0.0.0', port=5005, debug=False)
