@@ -114,12 +114,12 @@ def save_ip_to_database(ip_data):
                 timestamp = CURRENT_TIMESTAMP
         ''', (
             ip_data['ip'],
-            ip_data['location']['country'],
-            ip_data['location']['region'],
-            ip_data['location']['city'],
-            ip_data['location']['org'],
-            ip_data['vpn_detected'],
-            ip_data['vpn_type'],
+            ip_data['location'].get('country', 'Unknown'),
+            ip_data['location'].get('region'),
+            ip_data['location'].get('city'),
+            ip_data['location'].get('org'),
+            ip_data.get('vpn_detected', False),
+            ip_data.get('vpn_type'),
             json.dumps(ip_data)  # Store complete data as JSON
         ))
         conn.commit()
@@ -198,6 +198,13 @@ def get_ip_info(custom_ip=None):
     country_code = geo_data.get("country_code", "")
     country_flag = get_country_flag(country_code)
 
+    # Derive org-like field from available ASN info when org is missing in lite API
+    derived_org = (
+        geo_data.get("org")
+        or geo_data.get("as_name")
+        or (f"ASN {geo_data.get('asn')}" if geo_data.get('asn') and geo_data.get('asn') != 'Unknown' else None)
+    )
+
     return {
         "status": status,
         "ip": geo_data.get("ip", ip),
@@ -209,7 +216,11 @@ def get_ip_info(custom_ip=None):
             "continent_code": geo_data.get("continent_code", ""),
             "asn": geo_data.get("asn", "Unknown"),
             "as_name": geo_data.get("as_name", "Unknown"),
-            "as_domain": geo_data.get("as_domain", "Unknown")
+            "as_domain": geo_data.get("as_domain", "Unknown"),
+            # Lite API doesn't include these; set to None/Unknown-friendly values
+            "region": geo_data.get("region"),
+            "city": geo_data.get("city"),
+            "org": derived_org
         },
         "vpn_detected": False,
         "vpn_type": None
